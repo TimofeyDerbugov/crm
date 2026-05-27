@@ -1,5 +1,43 @@
 import { useState, useEffect, useRef } from "react";
 
+// ═══════════════════════════════════════════════
+// СТРОКИ 3-4: Supabase — вставьте свои ключи
+// ═══════════════════════════════════════════════
+const SUPABASE_URL = "https://uvgkxuuewduncphngtma.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV2Z2t4dXVld2R1bmNwaG5ndG1hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5MDIxNTYsImV4cCI6MjA5NTQ3ODE1Nn0.OsWgx6kktWXoqrs0CbQhpr3SN0oZE7REaFwfemIPEIQ";
+
+// Универсальный клиент Supabase (без сторонних библиотек)
+const db = {
+  async get(table) {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=*&order=id.asc`, {
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+    });
+    return r.json();
+  },
+  async insert(table, data) {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+      method: "POST",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=representation" },
+      body: JSON.stringify(data)
+    });
+    return r.json();
+  },
+  async update(table, id, data) {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
+      method: "PATCH",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=representation" },
+      body: JSON.stringify(data)
+    });
+    return r.json();
+  },
+  async delete(table, id) {
+    await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
+      method: "DELETE",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+    });
+  }
+};
+
 const ORANGE = "#FF6B1A";
 const ORANGE_DIM = "#CC5210";
 const BG = "#0F0F0F";
@@ -420,17 +458,35 @@ function Orders({ orders, setOrders, prices }) {
   const statuses = ["все", "замер", "расчет", "монтаж", "завершено"];
   const filtered = filter === "все" ? orders : orders.filter(o => o.status === filter);
 
-  const save = (data) => {
+  // ═══════════════════════════════════════════════
+  // ЗАМЕНА: сохранение заявки в Supabase
+  // ═══════════════════════════════════════════════
+  const save = async (data) => {
+    const payload = {
+      client: data.client, phone: data.phone, address: data.address,
+      status: data.status, fence_type: data.fenceType, perimeter: data.perimeter,
+      gates: data.gates, wicket: data.wicket, demolition: data.demolition,
+      delivery: data.delivery, total: data.total, manager: data.manager,
+      note: data.note, estimate: data.estimate
+    };
     if (editOrder) {
+      await db.update("orders", editOrder.id, payload);
       setOrders(prev => prev.map(o => o.id === editOrder.id ? { ...editOrder, ...data } : o));
     } else {
-      setOrders(prev => [...prev, { ...data, id: Date.now(), created: new Date().toISOString().split("T")[0] }]);
+      const [created] = await db.insert("orders", payload);
+      setOrders(prev => [...prev, { ...data, id: created.id, created: created.created_at }]);
     }
     setShowForm(false); setEditOrder(null);
   };
 
-  const del = (id) => {
-    if (confirm("Удалить заявку?")) setOrders(prev => prev.filter(o => o.id !== id));
+  // ═══════════════════════════════════════════════
+  // ЗАМЕНА: удаление заявки из Supabase
+  // ═══════════════════════════════════════════════
+  const del = async (id) => {
+    if (confirm("Удалить заявку?")) {
+      await db.delete("orders", id);
+      setOrders(prev => prev.filter(o => o.id !== id));
+    }
   };
 
   return (
@@ -664,15 +720,26 @@ function Warehouse({ warehouse, setWarehouse }) {
   const [showAdd, setShowAdd] = useState(false);
   const [newItem, setNewItem] = useState({ name: "", qty: "", unit: "м", minQty: "" });
 
-  const add = () => {
+  // ═══════════════════════════════════════════════
+  // ЗАМЕНА: добавление позиции склада в Supabase
+  // ═══════════════════════════════════════════════
+  const add = async () => {
     if (!newItem.name || !newItem.qty) return;
-    setWarehouse(prev => [...prev, { ...newItem, id: Date.now(), qty: Number(newItem.qty), minQty: Number(newItem.minQty), lastIn: new Date().toISOString().split("T")[0] }]);
+    const payload = { name: newItem.name, qty: Number(newItem.qty), unit: newItem.unit, min_qty: Number(newItem.minQty) };
+    const [created] = await db.insert("warehouse", payload);
+    setWarehouse(prev => [...prev, { ...newItem, id: created.id, qty: Number(newItem.qty), minQty: Number(newItem.minQty), lastIn: created.last_in }]);
     setNewItem({ name: "", qty: "", unit: "м", minQty: "" });
     setShowAdd(false);
   };
 
-  const adjust = (id, delta) => {
-    setWarehouse(prev => prev.map(w => w.id === id ? { ...w, qty: Math.max(0, w.qty + delta) } : w));
+  // ═══════════════════════════════════════════════
+  // ЗАМЕНА: изменение остатка склада в Supabase
+  // ═══════════════════════════════════════════════
+  const adjust = async (id, delta) => {
+    const item = warehouse.find(w => w.id === id);
+    const newQty = Math.max(0, item.qty + delta);
+    await db.update("warehouse", id, { qty: newQty });
+    setWarehouse(prev => prev.map(w => w.id === id ? { ...w, qty: newQty } : w));
   };
 
   const low = warehouse.filter(w => w.qty <= w.minQty);
@@ -744,9 +811,14 @@ function Finances({ finances, setFinances }) {
   const income = finances.filter(f => f.type === "доход").reduce((s, f) => s + f.amount, 0);
   const expense = finances.filter(f => f.type === "расход").reduce((s, f) => s + f.amount, 0);
 
-  const add = () => {
+  // ═══════════════════════════════════════════════
+  // ЗАМЕНА: добавление финансовой записи в Supabase
+  // ═══════════════════════════════════════════════
+  const add = async () => {
     if (!newRec.amount || !newRec.desc) return;
-    setFinances(prev => [...prev, { ...newRec, id: Date.now(), amount: Number(newRec.amount), date: new Date().toISOString().split("T")[0] }]);
+    const payload = { type: newRec.type, category: newRec.category, description: newRec.desc, amount: Number(newRec.amount) };
+    const [created] = await db.insert("finances", payload);
+    setFinances(prev => [...prev, { ...newRec, id: created.id, amount: Number(newRec.amount), date: created.date }]);
     setNewRec({ type: "доход", category: "Оплата заказа", desc: "", amount: "" });
     setShowAdd(false);
   };
@@ -1021,11 +1093,44 @@ const NAV = [
 
 export default function App() {
   const [screen, setScreen] = useState("dashboard");
-  const [orders, setOrders] = useState(initialOrders);
-  const [finances, setFinances] = useState(initialFinances);
-  const [warehouse, setWarehouse] = useState(initialWarehouse);
+  // ═══════════════════════════════════════════════
+  // ЗАМЕНА: пустые массивы вместо initialXxx —
+  // данные грузятся из Supabase в useEffect ниже
+  // ═══════════════════════════════════════════════
+  const [orders, setOrders] = useState([]);
+  const [finances, setFinances] = useState([]);
+  const [warehouse, setWarehouse] = useState([]);
   const [prices, setPrices] = useState(initialPrices);
+  const [loading, setLoading] = useState(true);
   const isAdmin = true;
+
+  // ═══════════════════════════════════════════════
+  // НОВОЕ: загрузка данных из Supabase при старте
+  // ═══════════════════════════════════════════════
+  useEffect(() => {
+    Promise.all([
+      db.get("orders"),
+      db.get("finances"),
+      db.get("warehouse"),
+    ]).then(([o, f, w]) => {
+      if (Array.isArray(o)) setOrders(o.map(x => ({
+        ...x, fenceType: x.fence_type, created: x.created_at
+      })));
+      if (Array.isArray(f)) setFinances(f.map(x => ({ ...x, desc: x.description })));
+      if (Array.isArray(w)) setWarehouse(w.map(x => ({ ...x, minQty: x.min_qty, lastIn: x.last_in })));
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, []);
+
+  // ═══════════════════════════════════════════════
+  // НОВОЕ: экран загрузки пока данные тянутся
+  // ═══════════════════════════════════════════════
+  if (loading) return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: BG, flexDirection: "column", gap: 16 }}>
+      <div style={{ color: ORANGE, fontFamily: "'Unbounded',sans-serif", fontSize: 24, fontWeight: 900 }}>⚙ Заборыч</div>
+      <div style={{ color: MUTED, fontSize: 13 }}>Загрузка данных...</div>
+    </div>
+  );
 
   const screens = {
     dashboard: <Dashboard orders={orders} finances={finances} />,
